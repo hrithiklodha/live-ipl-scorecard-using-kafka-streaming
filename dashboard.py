@@ -1,8 +1,8 @@
+
 import streamlit as st
 from pyspark.sql import SparkSession, functions as F
 import time
 from datetime import datetime
-from collections import defaultdict
 def init_spark():
     return SparkSession.builder \
         .appName("StreamlitApp") \
@@ -11,7 +11,6 @@ def init_spark():
 spark = init_spark()
 st.set_page_config(layout="wide")
 st.title("🏏 Live IPL Scorecard")
-
 if 'match_data' not in st.session_state:
     st.session_state.match_data = {
         'current_innings': 1,
@@ -20,11 +19,8 @@ if 'match_data' not in st.session_state:
         'wickets': 0,
         'last_processed': None,
         'batting_team': None,
-        'bowling_team': None,
-        'batsmen_scores': defaultdict(int),
-        'batsmen_order': []
+        'bowling_team': None
     }
-
 st.markdown("""
 <style>
 .metric-card {
@@ -71,17 +67,10 @@ def update_innings_data(stats):
     current_innings = safe_get(stats, 'inning', 1)
     batting_team = safe_get(stats, 'batting_team')
     bowling_team = safe_get(stats, 'bowling_team')
-    current_batter = safe_get(stats, 'batter')
-    runs_scored = safe_get(stats, 'batsman_runs', 0)
 
     if st.session_state.match_data['batting_team'] is None:
         st.session_state.match_data['batting_team'] = batting_team
         st.session_state.match_data['bowling_team'] = bowling_team
-
-    if current_batter and current_batter not in st.session_state.match_data['batsmen_scores']:
-        st.session_state.match_data['batsmen_order'].append(current_batter)
-    if current_batter:
-        st.session_state.match_data['batsmen_scores'][current_batter] += runs_scored
 
     if current_innings != st.session_state.match_data['current_innings']:
         innings_key = f"Innings {st.session_state.match_data['current_innings']}"
@@ -134,20 +123,7 @@ def display_scorecard():
     player_cols[0].metric("Batter", safe_get(stats, 'batter', '-'))
     player_cols[1].metric("Bowler", safe_get(stats, 'bowler', '-'))
     player_cols[2].metric("Non-Striker", safe_get(stats, 'non_striker', '-'))
-    current_batter = safe_get(stats, 'batter', '-')
-    batter_runs = st.session_state.match_data['batsmen_scores'].get(current_batter, 0)
-
-    st.subheader("🧑 Batsmen Performance")
-    batsmen_cols = st.columns([2, 1])
-    with batsmen_cols[0]:
-        st.markdown("**Batsman**")
-        for batsman in st.session_state.match_data['batsmen_order']:
-            st.write(f"{batsman}")
-    with batsmen_cols[1]:
-        st.markdown("**Runs**")
-        for batsman in st.session_state.match_data['batsmen_order']:
-            st.write(f"{st.session_state.match_data['batsmen_scores'][batsman]}")
 if __name__ == "__main__":
     display_scorecard()
-    time.sleep(3)
+    time.sleep(2)
     st.rerun()
