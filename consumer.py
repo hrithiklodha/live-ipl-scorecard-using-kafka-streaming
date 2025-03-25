@@ -1,15 +1,18 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col
+from pyspark.sql.functions import from_json, col, current_timestamp
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 
-# Initialize Spark session
+# Initialize Spark session with explicit memory settings
 spark = SparkSession.builder \
-    .appName("IPLConsumer") \
+    .appName("iplscores") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0") \
+    .config("spark.sql.shuffle.partitions", "1") \
+    .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true") \
     .getOrCreate()
 
-spark.sparkContext.setLogLevel("WARN") 
+spark.sparkContext.setLogLevel("WARN")
 
-# Define schema for the incoming data
+# Define schema (same as before)
 schema = StructType([
     StructField("match_id", StringType(), nullable=False),
     StructField("inning", StringType(), nullable=False),
@@ -30,23 +33,40 @@ schema = StructType([
     StructField("fielder", StringType(), nullable=True)
 ])
 
-# Read data from Kafka
+# Read from Kafka
 df = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "localhost:9092") \
     .option("subscribe", "iplscores") \
     .load()
 
-# Convert the value column from Kafka to a string
-df = df.selectExpr("CAST(value AS STRING)")
+# Parse JSON and add processing timestamp
+parsed_df = df.selectExpr("CAST(value AS STRING)") \
+    .select(from_json(col("value"), schema).alias("data")) \
+    .select("data.*") \
+    .withColumn("processing_time", current_timestamp())
 
-# Parse the JSON data and apply the schema
-df = df.select(from_json(col("value"), schema).alias("data")).select("data.*")
+# Convert numeric fields
+numeric_fields = ["match_id", "inning", "over", "ball", 
+                "batsman_runs", "extra_runs", "total_runs", "is_wicket"]
+for field in numeric_fields:
+    parsed_df = parsed_df.withColumn(field, col(field).cast(IntegerType()))
 
-# Write the streaming data to console (for debugging)
-query = df.writeStream \
+import shutil
+import os
+
+# Delete existing checkpoint directory if it exists
+checkpoint_dir = "/tmp/bowling_teams_checkpoint"
+if os.path.exists(checkpoint_dir):
+    shutil.rmtree(checkpoint_dir)
+
+query = parsed_df.writeStream \
+    .format("parquet") \
+    .option("path", "/tmp/bowling_teams_parquet") \
+    .option("checkpointLocation", "/tmp/bowling_teams_checkpoint") \
     .outputMode("append") \
-    .format("console") \
     .start()
 
+
+print("Spark streaming query started. Waiting for termination...")
 query.awaitTermination()
