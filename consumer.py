@@ -1,15 +1,21 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, current_timestamp
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from pyspark.sql.types import *
+import os
+import shutil
 
-# Initialize Spark session with explicit memory settings
+# Clear previous data
+shutil.rmtree("/tmp/bowling_teams_parquet", ignore_errors=True)
+shutil.rmtree("/tmp/bowling_teams_checkpoint", ignore_errors=True)
+
 spark = SparkSession.builder \
     .appName("iplscores") \
-    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0") \
-    .config("spark.sql.shuffle.partitions", "1") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.4") \
+    .config("spark.sql.streaming.schemaInference", "true") \
+    .config("spark.sql.parquet.compression.codec", "uncompressed") \
     .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true") \
     .getOrCreate()
-
+    
 spark.sparkContext.setLogLevel("WARN")
 
 # Define schema (same as before)
@@ -64,9 +70,9 @@ query = parsed_df.writeStream \
     .format("parquet") \
     .option("path", "/tmp/bowling_teams_parquet") \
     .option("checkpointLocation", "/tmp/bowling_teams_checkpoint") \
+    .trigger(processingTime="5 seconds") \
     .outputMode("append") \
     .start()
-
 
 print("Spark streaming query started. Waiting for termination...")
 query.awaitTermination()
