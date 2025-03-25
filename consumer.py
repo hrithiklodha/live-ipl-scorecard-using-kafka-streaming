@@ -4,10 +4,8 @@ from pyspark.sql.types import *
 import os
 import shutil
 
-# Clear previous data
 shutil.rmtree("/tmp/bowling_teams_parquet", ignore_errors=True)
 shutil.rmtree("/tmp/bowling_teams_checkpoint", ignore_errors=True)
-
 spark = SparkSession.builder \
     .appName("iplscores") \
     .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.4") \
@@ -18,7 +16,6 @@ spark = SparkSession.builder \
     
 spark.sparkContext.setLogLevel("WARN")
 
-# Define schema (same as before)
 schema = StructType([
     StructField("match_id", StringType(), nullable=False),
     StructField("inning", StringType(), nullable=False),
@@ -39,33 +36,27 @@ schema = StructType([
     StructField("fielder", StringType(), nullable=True)
 ])
 
-# Read from Kafka
 df = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "localhost:9092") \
     .option("subscribe", "iplscores") \
     .load()
 
-# Parse JSON and add processing timestamp
 parsed_df = df.selectExpr("CAST(value AS STRING)") \
     .select(from_json(col("value"), schema).alias("data")) \
     .select("data.*") \
     .withColumn("processing_time", current_timestamp())
 
-# Convert numeric fields
 numeric_fields = ["match_id", "inning", "over", "ball", 
                 "batsman_runs", "extra_runs", "total_runs", "is_wicket"]
 for field in numeric_fields:
     parsed_df = parsed_df.withColumn(field, col(field).cast(IntegerType()))
-
 import shutil
 import os
 
-# Delete existing checkpoint directory if it exists
 checkpoint_dir = "/tmp/bowling_teams_checkpoint"
 if os.path.exists(checkpoint_dir):
     shutil.rmtree(checkpoint_dir)
-
 query = parsed_df.writeStream \
     .format("parquet") \
     .option("path", "/tmp/bowling_teams_parquet") \
@@ -73,6 +64,5 @@ query = parsed_df.writeStream \
     .trigger(processingTime="5 seconds") \
     .outputMode("append") \
     .start()
-
 print("Spark streaming query started. Waiting for termination...")
 query.awaitTermination()
