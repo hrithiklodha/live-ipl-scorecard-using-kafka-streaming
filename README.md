@@ -8,3 +8,5 @@ kafka-topics --create --bootstrap-server localhost:9092 --replication-factor 1 -
 
 python producer.py
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.4 consumer.py
+
+streamlit run dashboard.py
