@@ -1,3 +1,4 @@
+# dashboard.py
 import streamlit as st
 from pyspark.sql import SparkSession, functions as F
 import time
@@ -9,18 +10,23 @@ def init_spark():
         .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0") \
         .getOrCreate()
 
-# 🔹 Initialize Spark & Streamlit UI
 spark = init_spark()
 st.set_page_config(layout="wide")
 st.title("🏏 Live IPL Scorecard")
 
-# 🔹 Initialize Session State
-if 'total_runs_cumulative' not in st.session_state:
-    st.session_state.total_runs_cumulative = 0
-if 'wickets_cumulative' not in st.session_state:
-    st.session_state.wickets_cumulative = 0
+# Initialize session state
+if 'match_data' not in st.session_state:
+    st.session_state.match_data = {
+        'current_innings': 1,
+        'innings_scores': {},
+        'total_runs': 0,
+        'wickets': 0,
+        'last_processed': None,
+        'batting_team': None,
+        'bowling_team': None
+    }
 
-# 🔹 CSS Styling for UI
+# CSS Styling
 st.markdown("""
 <style>
 .metric-card {
@@ -40,6 +46,12 @@ st.markdown("""
     font-size: 2rem !important;
     font-weight: bold;
 }
+.innings-card {
+    padding: 10px;
+    border-radius: 8px;
+    background-color: #e6f3ff;
+    margin: 8px 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -54,49 +66,85 @@ def get_latest_stats():
         st.error(f"❌ Error reading data: {str(e)}")
         return None
 
-def safe_get(row, field, default="N/A"):
-    """Safely get a field from a Row object or return default"""
+def safe_get(row, field, default=None):
     try:
         return row[field] if field in row else default
     except:
         return default
 
+def update_innings_data(stats):
+    current_innings = safe_get(stats, 'inning', 1)
+    batting_team = safe_get(stats, 'batting_team')
+    bowling_team = safe_get(stats, 'bowling_team')
+    
+    # Initialize teams if first ball
+    if st.session_state.match_data['batting_team'] is None:
+        st.session_state.match_data['batting_team'] = batting_team
+        st.session_state.match_data['bowling_team'] = bowling_team
+    
+    # Check if innings changed
+    if current_innings != st.session_state.match_data['current_innings']:
+        # Store previous innings score
+        innings_key = f"Innings {st.session_state.match_data['current_innings']}"
+        st.session_state.match_data['innings_scores'][innings_key] = {
+            'team': st.session_state.match_data['batting_team'],
+            'score': st.session_state.match_data['total_runs'],
+            'wickets': st.session_state.match_data['wickets']
+        }
+        
+        # Reset for new innings
+        st.session_state.match_data['current_innings'] = current_innings
+        st.session_state.match_data['total_runs'] = 0
+        st.session_state.match_data['wickets'] = 0
+        st.session_state.match_data['batting_team'] = batting_team
+        st.session_state.match_data['bowling_team'] = bowling_team
+    
+    # Update current innings totals
+    if stats['processing_time'] != st.session_state.match_data.get('last_processed'):
+        st.session_state.match_data['total_runs'] += safe_get(stats, 'total_runs', 0)
+        st.session_state.match_data['wickets'] += safe_get(stats, 'is_wicket', 0)
+        st.session_state.match_data['last_processed'] = stats['processing_time']
+
 def display_scorecard():
     stats = get_latest_stats()
-    
     if not stats:
         st.warning("⏳ Waiting for match data...")
         return
-
-    # 🔹 Update Cumulative Totals
-    if 'last_processed' not in st.session_state or st.session_state.last_processed != stats['processing_time']:
-        st.session_state.total_runs_cumulative += safe_get(stats, 'total_runs', 0)
-        st.session_state.wickets_cumulative += safe_get(stats, 'is_wicket', 0)
-        st.session_state.last_processed = stats['processing_time']
-
-    # 🔹 Display Batting & Bowling Teamsx
+    
+    update_innings_data(stats)
+    
+    # Display innings summary
+    if st.session_state.match_data['innings_scores']:
+        st.subheader("📊 Innings Summary")
+        for innings, data in st.session_state.match_data['innings_scores'].items():
+            st.markdown(f"""
+            <div class="innings-card">
+                <strong>{innings}:</strong> {data['team']} - 
+                <span class="metric-value">{data['score']}/{data['wickets']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Current match status
+    st.subheader("🏟️ Current Match")
     col1, col2 = st.columns(2)
-    col1.metric("🏏 Batting Team", safe_get(stats, 'batting_team'))
-    col2.metric("🎯 Bowling Team", safe_get(stats, 'bowling_team'))
-
-    # 🔹 Match Metrics
+    col1.metric("Batting Team", st.session_state.match_data['batting_team'])
+    col2.metric("Bowling Team", st.session_state.match_data['bowling_team'])
+    
+    # Match metrics
     cols = st.columns(4)
-    cols[0].metric("📊 Total Runs", st.session_state.total_runs_cumulative)
-    cols[1].metric("🎯 Wickets", st.session_state.wickets_cumulative)
-    cols[2].metric("🔢 Over", f"{safe_get(stats, 'over', 0)}.{safe_get(stats, 'ball', 0)}")
-    cols[3].metric("⏱️ Last Updated", datetime.now().strftime("%H:%M:%S"))
-
-    # 🔹 Player Info
-    st.subheader("⚡ Current Players")
+    cols[0].metric("Total Runs", st.session_state.match_data['total_runs'])
+    cols[1].metric("Wickets", st.session_state.match_data['wickets'])
+    cols[2].metric("Current Over", f"{safe_get(stats, 'over', 0)}.{safe_get(stats, 'ball', 0)}")
+    cols[3].metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
+    
+    # Current players
+    st.subheader(" Current Players")
     player_cols = st.columns(3)
-    player_cols[0].metric("🧑 Batter", safe_get(stats, 'batter'))
-    player_cols[1].metric("🎯 Bowler", safe_get(stats, 'bowler'))
-    player_cols[2].metric("🧑 Non-Striker", safe_get(stats, 'non_striker'))
+    player_cols[0].metric("Batter", safe_get(stats, 'batter', '-'))
+    player_cols[1].metric("Bowler", safe_get(stats, 'bowler', '-'))
+    player_cols[2].metric("Non-Striker", safe_get(stats, 'non_striker', '-'))
 
-# 🔹 Run Dashboard
 if __name__ == "__main__":
     display_scorecard()
-
-    # 🔄 Auto-refresh every 5 seconds
     time.sleep(2)
     st.rerun()
